@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lightningnetwork/lnd/certprovider"
 	"github.com/lightningnetwork/lnd/lntest/mock"
 )
 
@@ -122,7 +123,7 @@ func TestTLSAutoRegeneration(t *testing.T) {
 		RPCListeners: rpcListeners,
 	}
 	keyRing := &mock.SecretKeyRing{}
-	_, _, _, cleanUp, _, err := getTLSConfig(cfg, keyRing)
+	_, _, _, cleanUp, _, _, err := getTLSConfig(cfg, keyRing)
 	if err != nil {
 		t.Fatalf("couldn't retrieve TLS config")
 	}
@@ -204,4 +205,41 @@ func genExpiredCertPair(t *testing.T, certDirPath string) ([]byte, []byte) {
 	}
 
 	return certDerBytes, keyBytes
+}
+
+// TestExpiredCertDetector tests that when ZeroSSL is used, the program checks
+// correctly whether the ZeroSSL certificate is expiring soon.
+func TestExpiredCertDetector(t *testing.T) {
+	testCertId := "testid"
+
+	// Create a certificate that expires in 1 day to make sure that our
+	// detector notices it is expiring soon.
+	testCert := certprovider.ZeroSSLExternalCert{
+		Id: testCertId,
+		Expires: time.Now().Add(time.Hour * 24 * 2).Format("2006-01-02 15:04:05"),
+	}
+
+	// Create mock ZeroSSL
+	zerossl := certprovider.MockZeroSSLProvider{
+		Certs: make(map[string]certprovider.ZeroSSLExternalCert),
+	}
+
+	zerossl.Certs[testCertId] = testCert
+
+	// The certificate is expiring in 2 days. Our expired cert detector
+	// should notice this.
+	expired := CheckForExpiredCert(&zerossl, testCertId)
+	if !expired {
+		t.Fatalf("failed to detect expiring certificate")
+	}
+
+	// Also should check that the detector notices when the certificate
+	// is NOT expiring soon. Try a certificate that's expiring in 4 days.
+	testCert.Expires = time.Now().Add(time.Hour * 24 * 4).Format("2006-01-02 15:04:05")
+	zerossl.Certs[testCertId] = testCert
+
+	expired = CheckForExpiredCert(&zerossl, testCertId)
+        if expired {
+                t.Fatalf("this certificate is not expiring in three days or less")
+        }
 }
